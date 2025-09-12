@@ -1,0 +1,144 @@
+REPORT zkk_provim.
+
+TABLES: ekko, ekpo, eket, makt.
+
+SELECT-OPTIONS: s_bsart FOR ekko-bsart,
+                 s_aedat FOR ekko-aedat  DEFAULT '20240810'.
+
+PARAMETERS: p_bukrs TYPE ekko-bukrs DEFAULT '1710'.
+
+TYPES: BEGIN OF ty_output,
+         sel TYPE c LENGTH 1,
+         ebeln TYPE ekko-ebeln,
+         bukrs TYPE ekko-bukrs,
+         bsart TYPE ekko-bsart,
+         aedat TYPE ekko-aedat,
+         ebelp TYPE ekpo-ebelp,
+         netwr TYPE ekpo-netwr,
+         matnr TYPE ekpo-matnr,
+         maktx TYPE makt-maktx,
+         etenr TYPE eket-etenr,
+         banfn TYPE eket-banfn,
+         bnfpo TYPE eket-bnfpo,
+       END OF ty_output.
+
+DATA: gt_output TYPE STANDARD TABLE OF ty_output,
+      gs_output TYPE ty_output,
+      gs_fcat   TYPE slis_fieldcat_alv,
+      gt_fcat   TYPE slis_t_fieldcat_alv,
+      gs_layout TYPE slis_layout_alv.
+
+START-OF-SELECTION.
+
+  SELECT  ekko~ebeln
+          ekko~bukrs
+          ekko~bsart
+          ekko~aedat
+          ekpo~ebelp
+          ekpo~netwr
+          ekpo~matnr
+          makt~maktx
+          eket~etenr
+          eket~banfn
+          eket~bnfpo
+  FROM ekko
+    JOIN ekpo
+    ON ekpo~ebeln = ekko~ebeln
+    AND ekpo~loekz = ''
+    LEFT JOIN makt
+    ON ekpo~matnr = makt~matnr
+  AND makt~spras = sy-langu
+    LEFT JOIN eket
+    ON ekpo~ebeln = eket~ebeln
+    AND ekpo~ebelp = eket~ebelp
+    AND eket~etenr = '0001'
+    INTO  CORRESPONDING FIELDS OF TABLE  gt_output
+    WHERE ekko~bsart IN s_bsart
+    AND ekko~aedat IN s_aedat
+    AND ekko~bukrs = p_bukrs.
+
+  IF sy-subrc <> 0.
+    MESSAGE 'Nuk ka te dhena ' TYPE 'I'.
+
+  ENDIF.
+
+  gs_layout-box_fieldname = 'SEL'.
+
+  PERFORM fcat USING 'EBELN' 'EKKO' 'Purchase Doc'  'X' CHANGING gt_fcat.
+  PERFORM fcat USING 'BUKRS' 'EKKO' 'Company Code'  ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'BSART' 'EKKO' 'Doc Type'      ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'AEDAT' 'EKKO' 'Created On'    ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'EBELP' 'EKPO' 'Item'          ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'NETWR' 'EKPO' 'Amount'        ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'MATNR' 'EKPO' 'MAterial'      ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'MAKTX' 'MAKT' 'Material Desc' ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'ETENR' 'EKET' 'Sched. Line'   ''  CHANGING gt_fcat.
+  PERFORM fcat USING 'BANFN' 'EKET' 'Purchase Req.' 'X' CHANGING gt_fcat.
+  PERFORM fcat USING 'BNFPO' 'EKET' 'Pr Item'       ''  CHANGING gt_fcat.
+
+  CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+    EXPORTING
+      i_callback_program       = sy-repid
+      i_callback_pf_status_set = 'SET_PF_STATUS'
+      i_callback_user_command  = 'USER_COMMAND'
+      is_layout                = gs_layout
+      it_fieldcat              = gt_fcat
+    TABLES
+      t_outtab                 = gt_output
+    EXCEPTIONS
+      program_error            = 1
+      OTHERS                   = 2.
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+
+
+FORM fcat USING uv_fieldname TYPE slis_fieldcat_alv-fieldname
+                uv_reftab TYPE slis_fieldcat_alv-ref_tabname
+                uv_seltext_m TYPE slis_fieldcat_alv-seltext_m
+                uv_hotspot TYPE c
+         CHANGING ct_fcat TYPE slis_t_fieldcat_alv.
+
+  gs_fcat-fieldname   = uv_fieldname .
+  gs_fcat-ref_tabname = uv_reftab    .
+  gs_fcat-seltext_m   = uv_seltext_m .
+  gs_fcat-hotspot     = uv_hotspot   .
+  APPEND gs_fcat TO ct_fcat.
+  CLEAR gs_fcat.
+ENDFORM.
+
+FORM set_pf_status USING rt_extab TYPE slis_t_extab.
+  SET PF-STATUS 'ZSTANDART'.
+ENDFORM.
+
+FORM user_command USING r_ucomm TYPE sy-ucomm
+                        rs_selfield TYPE slis_selfield.
+
+  DATA: lv_total TYPE ekpo-netwr.
+
+  CASE r_ucomm.
+    WHEN 'SUM'.
+      LOOP AT gt_output INTO gs_output WHERE sel = 'X'.
+        lv_total = lv_total + gs_output-netwr.
+      ENDLOOP.
+
+      MESSAGE | totali i faturave: $ { lv_total } | TYPE 'I'.
+
+    WHEN '&IC1' . "DOUBLE CLICK
+
+      CASE rs_selfield-fieldname.
+        WHEN 'EBELN'.
+          IF rs_selfield-value IS NOT INITIAL.
+*set PARAMETER ID 'BES' field rs_selfield-value.
+            CALL TRANSACTION 'ME23N'.
+          ENDIF.
+        WHEN 'BAFN'.
+          IF rs_selfield-value IS NOT INITIAL .
+            CALL TRANSACTION 'ME53N'.
+          ENDIF.
+
+
+      ENDCASE.
+  ENDCASE.
+ENDFORM.
