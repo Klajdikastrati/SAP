@@ -1,0 +1,839 @@
+PROGRAM zkk_container.
+
+TYPE-POOLS: vrm.
+
+TABLES: zkk_container.
+
+TYPES: BEGIN OF ty_container,
+         cn             TYPE zkk_container-cn,
+         matnr          TYPE zkk_container-matnr,
+         original_matnr TYPE zkk_container-matnr,
+         maktx          TYPE zkk_container-maktx,
+         quant          TYPE zkk_container-quant,
+         shift          TYPE zkk_container-shift,
+         dats           TYPE zkk_container-dats,
+         usern          TYPE zkk_container-usern,
+         del            TYPE zkk_container-del,
+       END OF ty_container.
+
+DATA: BEGIN OF gs_scr_100,
+        cn      TYPE zkk_container-cn,
+        ok_code TYPE sy-ucomm,
+      END OF gs_scr_100.
+
+DATA: BEGIN OF gs_scr_200,
+        del     TYPE c LENGTH 1,
+        ok_code TYPE sy-ucomm,
+      END OF gs_scr_200.
+
+DATA: gt_container TYPE STANDARD TABLE OF ty_container,
+      gs_container TYPE ty_container.
+
+DATA: gv_read_mode TYPE abap_bool VALUE abap_true,
+      gv_show_del  TYPE abap_bool VALUE abap_false,
+      gt_exlude    TYPE TABLE OF sy-ucomm.
+
+CONTROLS: container TYPE TABLEVIEW USING SCREEN 0200.
+
+MODULE status_0100 OUTPUT.
+  SET PF-STATUS 'STATUS_0100'.
+  SET TITLEBAR 'TITLE_0100'.
+ENDMODULE.
+
+MODULE user_command_0100 INPUT.
+  PERFORM user_command_0100.
+ENDMODULE.
+
+MODULE status_0200 OUTPUT.
+
+  SET TITLEBAR 'TITLE_0200' .
+
+  IF gv_read_mode = abap_true.
+    APPEND 'FC_SAVE' TO gt_exlude.
+    APPEND 'ADD_ROW' TO gt_exlude.
+    APPEND 'DEL_ROW' TO gt_exlude.
+    SET PF-STATUS 'STATUS_0200' EXCLUDING gt_exlude.
+  ELSE.
+    SET PF-STATUS 'STATUS_0200'.
+  ENDIF.
+
+  LOOP AT SCREEN.
+
+    IF  gv_read_mode = abap_true OR screen-group1 <> 'GR1'.
+      screen-input = 0.
+    ELSE.
+      screen-input = 1.
+    ENDIF.
+    IF screen-group2 = 'GR2'.
+      screen-input = 1.
+    ENDIF.
+
+    MODIFY SCREEN.
+  ENDLOOP.
+
+  IF gt_container IS INITIAL.
+    APPEND INITIAL LINE TO gt_container.
+  ENDIF.
+
+  PERFORM shift_listbox.
+
+ENDMODULE.
+
+MODULE user_command_0200 INPUT.
+  PERFORM user_command_0200.
+ENDMODULE.
+
+FORM user_command_0100.
+
+  DATA: lv_answer(1) TYPE c.
+
+  CASE gs_scr_100-ok_code.
+
+    WHEN 'SEARCH'.
+
+      CLEAR gs_container.
+
+      SELECT  SINGLE *
+        FROM zkk_container
+        INTO CORRESPONDING FIELDS OF  @gs_container
+        WHERE cn = @gs_scr_100-cn.
+
+
+      IF sy-subrc <> 0.
+
+        CLEAR gt_container.
+        gv_read_mode = abap_false.
+
+
+        CALL FUNCTION 'POPUP_TO_CONFIRM'
+          EXPORTING
+            titlebar       = 'Container not found!'(001)
+            text_question  = TEXT-002
+            default_button = '2'
+          IMPORTING
+            answer         = lv_answer.
+        IF lv_answer <> '1'.
+          CLEAR gs_scr_100-ok_code.
+          RETURN.
+        ENDIF.
+      ENDIF.
+
+      PERFORM load_container_data.
+      CALL SCREEN 200.
+
+
+    WHEN 'FC_EXIT' OR 'FC_BACK' OR 'FC_CANC'.
+      LEAVE PROGRAM.
+
+
+  ENDCASE.
+
+ENDFORM.
+
+FORM user_command_0200.
+
+  CASE gs_scr_200-ok_code.
+
+    WHEN 'ADD_ROW'.
+
+      CLEAR gs_container.
+      gs_container-cn = gs_scr_100-cn.
+      APPEND gs_container TO gt_container.
+
+    WHEN 'DEL_ROW'.
+      IF gt_container IS NOT INITIAL.
+        DELETE gt_container INDEX lines( gt_container ).
+        MESSAGE TEXT-003 TYPE 'S'.
+      ELSE.
+        MESSAGE TEXT-004 TYPE 'W'.
+      ENDIF.
+
+    WHEN 'DISPLAY'.
+
+      CASE gv_read_mode.
+        WHEN 'X'.
+          gv_read_mode = abap_false.
+        WHEN ''.
+          gv_read_mode = abap_true.
+      ENDCASE.
+
+    WHEN 'FC_SAVE'.
+
+      PERFORM save_data.
+
+    WHEN  'FC_DEL'.
+
+      IF gv_show_del = 'X'.
+        gv_show_del = abap_false.
+      ELSE.
+        gv_show_del = 'X'.
+      ENDIF.
+      PERFORM load_container_data.
+
+    WHEN 'DOWNLOAD'.
+      PERFORM download_excel.
+
+    WHEN 'UPLOAD'.
+      PERFORM upload_excel.
+
+    WHEN 'EMAIL'.
+      PERFORM send_email.
+
+    WHEN 'FC_EXIT' OR 'FC_BACK' OR 'FC_CANC'.
+      LEAVE TO SCREEN 100.
+
+  ENDCASE.
+
+  CLEAR gs_scr_200-ok_code.
+ENDFORM.
+
+
+FORM shift_listbox.
+  DATA: ls_cnshift TYPE vrm_id,
+        lt_values  TYPE vrm_values,
+        ls_value   TYPE vrm_value.
+
+  ls_cnshift = gs_container-shift.
+  CLEAR ls_value.
+
+  ls_value-key = '1'.
+  ls_value-text = TEXT-005.
+  APPEND ls_value TO lt_values.
+
+  ls_value-key = '2'.
+  ls_value-text = TEXT-006.
+  APPEND ls_value TO lt_values.
+
+  ls_value-key = '3'.
+  ls_value-text = TEXT-007.
+  APPEND ls_value TO lt_values.
+
+  CALL FUNCTION 'VRM_SET_VALUES'
+    EXPORTING
+      id     = ls_cnshift
+      values = lt_values.
+
+ENDFORM.
+
+FORM load_container_data.
+
+  IF gs_scr_200-del = 'X'.
+
+    SELECT cn, matnr, quant, shift, del, dats, usern
+       FROM zkk_container
+       INTO CORRESPONDING FIELDS OF TABLE @gt_container
+       WHERE cn = @gs_scr_100-cn
+       ORDER BY matnr.
+
+  ELSE.
+
+    SELECT cn, matnr, quant, shift, del, dats, usern
+ FROM zkk_container
+       WHERE cn = @gs_scr_100-cn
+       AND del IS INITIAL
+       ORDER BY matnr
+     INTO CORRESPONDING FIELDS OF TABLE @gt_container.
+  ENDIF.
+
+  IF gs_container IS INITIAL.
+    gs_container-cn = gs_scr_100-cn.
+    APPEND gs_container TO gt_container.
+  ENDIF.
+
+  LOOP AT gt_container INTO gs_container.
+    gs_container-original_matnr = gs_container-matnr.
+    MODIFY gt_container FROM gs_container.
+    IF gs_container-matnr IS NOT INITIAL AND  gs_container-maktx IS INITIAL.
+
+      PERFORM get_material_description USING    gs_container-matnr
+                                       CHANGING gs_container-maktx.
+    ENDIF.
+
+    IF sy-subrc = 0.
+      MODIFY gt_container FROM gs_container.
+    ENDIF.
+
+  ENDLOOP.
+
+ENDFORM.
+
+
+FORM get_material_description
+   USING    uv_matnr TYPE matnr
+  CHANGING cv_maktx TYPE maktx.
+
+  SELECT SINGLE maktx INTO @cv_maktx
+    FROM makt
+    WHERE matnr = @uv_matnr.
+*      AND spras = @sy-langu.
+
+  IF sy-subrc = 0.
+    gs_container-maktx = cv_maktx.
+  ENDIF.
+
+ENDFORM.
+
+
+FORM save_data.
+
+
+DATA: lv_count       TYPE i,
+        ls_db_container TYPE zkk_container,
+        lt_matnr_del   TYPE TABLE OF zkk_container-matnr,
+        lv_msg         TYPE string.
+
+  IF gt_container IS INITIAL.
+    MESSAGE text-008 TYPE 'W'.
+    RETURN.
+  ENDIF.
+
+  CLEAR lt_matnr_del.
+  SELECT matnr
+    INTO TABLE @lt_matnr_del
+    FROM zkk_container
+    WHERE cn = @gs_scr_100-cn
+      AND del = @abap_true.
+
+
+
+  LOOP AT gt_container INTO gs_container WHERE matnr IS NOT INITIAL.
+
+    data(lv_tabix) = sy-tabix + 1.
+
+    READ TABLE lt_matnr_del WITH KEY table_line = gs_container-matnr TRANSPORTING NO FIELDS.
+    IF sy-subrc = 0.
+      CONCATENATE 'Materiali i fshirë' gs_container-matnr 'nuk mund të ndryshohet për kontejnerin' gs_container-cn INTO lv_msg SEPARATED BY ' '.
+      MESSAGE lv_msg TYPE 'E'.
+      RETURN.
+    ENDIF.
+
+LOOP AT gt_container TRANSPORTING NO FIELDS from  lv_tabix WHERE matnr = gs_container-matnr.
+  exit.
+  endloop.
+  IF  sy-subrc = 0.
+   MESSAGE 'No duplicate matnr allowed' TYPE 'E'.
+  ENDIF.
+
+ENDLOOP.
+
+
+
+  LOOP AT gt_container INTO gs_container.
+    IF gs_container-matnr IS INITIAL.
+      CONTINUE.
+    ENDIF.
+    CLEAR ls_db_container.
+
+    MOVE-CORRESPONDING gs_container TO ls_db_container.
+    CLEAR ls_db_container-maktx.
+    ls_db_container-dats = sy-datum.
+    ls_db_container-usern = sy-uname.
+
+    IF gs_container-original_matnr IS INITIAL.
+
+      INSERT zkk_container FROM ls_db_container.
+      IF sy-subrc = 0.
+        lv_count = lv_count + 1.
+      ELSE.
+        CONCATENATE 'Dështoi futja e materialit' gs_container-matnr INTO lv_msg SEPARATED BY ' '.
+        MESSAGE lv_msg TYPE 'E'.
+        RETURN.
+      ENDIF.
+
+    ELSEif gs_container-matnr = gs_container-original_matnr.
+
+      UPDATE zkk_container SET
+        matnr = @ls_db_container-matnr,
+        quant = @ls_db_container-quant,
+        shift = @ls_db_container-shift,
+        dats = @ls_db_container-dats,
+        usern = @ls_db_container-usern,
+        del = @ls_db_container-del
+      WHERE cn = @ls_db_container-cn
+        AND matnr = @gs_container-original_matnr.
+      IF sy-subrc = 0 .
+        lv_count = lv_count + 1.
+      ELSE.
+        CONCATENATE 'Dështoi përditësimi i materialit' gs_container-matnr INTO lv_msg SEPARATED BY ' '.
+        MESSAGE lv_msg TYPE 'E'.
+        RETURN.
+      ENDIF.
+    ELSE.
+
+      DELETE FROM zkk_container
+        WHERE cn = @gs_container-cn
+          AND matnr = @gs_container-matnr.
+      IF sy-subrc = 0.
+        INSERT zkk_container FROM ls_db_container.
+        IF sy-subrc = 0.
+          lv_count = lv_count + 1.
+        ELSE.
+          CONCATENATE 'Dështoi futja e materialit të ri' gs_container-matnr INTO lv_msg SEPARATED BY ' '.
+          MESSAGE lv_msg TYPE 'E'.
+          ROLLBACK WORK.
+          RETURN.
+        ENDIF.
+    ENDIF.
+ENDIF.
+  ENDLOOP.
+
+  COMMIT WORK.
+
+  IF lv_count > 0.
+    MESSAGE text-030 TYPE 'S'.
+  ELSE.
+    MESSAGE text-009 TYPE 'E'. " Asnjë rekord nuk u ruajt
+  ENDIF.
+
+ENDFORM.
+
+
+
+FORM download_excel.
+
+
+  DATA: lv_path       TYPE string,
+        lv_name       TYPE string,
+        lv_full       TYPE string,
+        lv_rc         TYPE i,
+        lv_header     TYPE string,
+        lv_quant      TYPE string,
+        lv_shift_text TYPE string,
+        lv_date       TYPE string.
+
+
+  DATA: lt_container TYPE TABLE OF string,
+        lv_line      TYPE string.
+
+
+  lv_header = TEXT-010.
+  APPEND lv_header TO lt_container.
+
+  LOOP AT gt_container INTO gs_container.
+    CLEAR lv_quant.
+
+    lv_quant  = gs_container-quant.
+
+    CONCATENATE gs_container-dats+6(2) '.'
+                gs_container-dats+4(2) '.'
+                gs_container-dats+0(4)
+           INTO lv_date.
+
+
+    CASE gs_container-shift.
+      WHEN '1'.
+        lv_shift_text = TEXT-005.
+      WHEN '2'.
+        lv_shift_text = TEXT-006.
+      WHEN '3'.
+        lv_shift_text = TEXT-007.
+      WHEN OTHERS.
+        lv_shift_text = gs_container-shift.
+    ENDCASE.
+
+
+    CONCATENATE gs_container-cn
+                gs_container-matnr
+                gs_container-maktx
+                lv_quant
+                lv_shift_text
+                lv_date
+                gs_container-usern
+                gs_container-del
+               INTO lv_line
+               SEPARATED BY ','.
+
+    APPEND lv_line TO lt_container.
+
+  ENDLOOP.
+  cl_gui_frontend_services=>file_save_dialog(
+    EXPORTING
+      file_filter       = 'CSV Files (*.csv)|*.csv|All Files (*.*)|*.*'
+      default_extension = 'csv'
+      default_file_name = 'My report.csv'
+    CHANGING
+      filename          = lv_name
+      path              = lv_path
+      fullpath          = lv_full
+      user_action       = lv_rc ).
+
+
+  CALL FUNCTION 'GUI_DOWNLOAD'
+    EXPORTING
+      filename                = lv_full
+      filetype                = 'ASC'
+      write_field_separator   = 'X'
+    TABLES
+      data_tab                = lt_container
+    EXCEPTIONS
+      file_write_error        = 1
+      no_batch                = 2
+      gui_refuse_filetransfer = 3
+      invalid_type            = 4
+      no_authority            = 5
+      unknown_error           = 6
+      header_not_allowed      = 7
+      separator_not_allowed   = 8
+      filesize_not_allowed    = 9
+      header_too_long         = 10
+      dp_error_create         = 11
+      dp_error_send           = 12
+      dp_error_write          = 13
+      unknown_dp_error        = 14
+      access_denied           = 15
+      dp_out_of_memory        = 16
+      disk_full               = 17
+      dp_timeout              = 18
+      file_not_found          = 19
+      dataprovider_exception  = 20
+      control_flush_error     = 21
+      OTHERS                  = 22.
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+ENDFORM.
+
+FORM upload_excel.
+  DATA: lt_server_data TYPE TABLE OF string,
+        lv_line        TYPE string,
+        lv_header      TYPE string,
+        lv_quant       TYPE string,
+        lv_shift_text  TYPE string,
+        lv_filename    TYPE string,
+        lv_fullpath    TYPE string,
+        lv_lines       TYPE i,
+        lv_server_path TYPE string VALUE '/tmp/',
+        lv_date        TYPE string.
+
+  IF gt_container IS INITIAL.
+    MESSAGE TEXT-011 TYPE 'W'.
+    RETURN.
+  ENDIF.
+
+  CONCATENATE 'container_' gs_scr_100-cn '_' sy-datum '.csv' INTO lv_filename.
+  CONCATENATE lv_server_path lv_filename INTO lv_fullpath.
+
+  CLEAR: lt_server_data.
+
+  lv_header = TEXT-010 .
+  APPEND lv_header TO lt_server_data.
+
+  LOOP AT gt_container INTO gs_container.
+
+    IF gs_container-cn IS INITIAL AND    "i bejm skip rekordet qe jane bosh
+       gs_container-matnr IS INITIAL AND
+       gs_container-maktx IS INITIAL AND
+       gs_container-quant IS INITIAL.
+      CONTINUE.
+    ENDIF.
+
+    CLEAR: lv_quant, lv_shift_text.
+
+    IF gs_container-quant IS NOT INITIAL.
+      lv_quant = gs_container-quant.
+    ENDIF.
+
+    CONCATENATE gs_container-dats+6(2)
+              gs_container-dats+4(2)
+              gs_container-dats+0(4)
+         INTO lv_date SEPARATED BY '.'.
+
+    CASE gs_container-shift.
+      WHEN '1'.
+        lv_shift_text = TEXT-005.
+      WHEN '2'.
+        lv_shift_text = TEXT-006.
+      WHEN '3'.
+        lv_shift_text = TEXT-007.
+      WHEN OTHERS.
+        lv_shift_text = gs_container-shift.
+    ENDCASE.
+
+    CONCATENATE gs_container-cn
+                gs_container-matnr
+                gs_container-maktx
+                lv_quant
+                lv_shift_text
+                lv_date
+                gs_container-usern
+                gs_container-del
+               INTO lv_line
+               SEPARATED BY ','.
+
+    APPEND lv_line TO lt_server_data.
+  ENDLOOP.
+
+  DESCRIBE TABLE lt_server_data LINES lv_lines.
+  IF lv_lines <= 1.
+    MESSAGE   TEXT-013  TYPE 'W'.
+    RETURN.
+  ENDIF.
+
+  OPEN DATASET lv_fullpath FOR OUTPUT IN TEXT MODE ENCODING UTF-8.
+  IF sy-subrc = 0.
+
+    LOOP AT lt_server_data INTO lv_line.
+      TRANSFER lv_line TO lv_fullpath.
+    ENDLOOP.
+
+    CLOSE DATASET lv_fullpath.
+
+    lv_lines = lv_lines - 1.
+
+    MESSAGE | 'Container  uploaded successfully!' { lv_lines } | TYPE 'S'.
+
+  ELSE.
+    MESSAGE | 'Failed to create CSV file in AL11:'{ lv_fullpath } | TYPE 'E'.
+  ENDIF.
+ENDFORM.
+
+FORM send_email.
+
+  TYPES: BEGIN OF ty_data,
+           data(100) TYPE c,
+         END OF ty_data.
+
+  DATA: lv_quant      TYPE string,
+        lv_shift_text TYPE string,
+        lv_date       TYPE string.
+
+
+  DATA: lt_container     TYPE TABLE OF ty_data,
+        lv_container     TYPE ty_data,
+        lt_bin_container TYPE solix_tab,
+        lo_bcs           TYPE REF TO cl_bcs,
+        lv_lines(10)     TYPE n, "numri rekordeve
+        lv_subject       TYPE so_obj_des,
+        lt_text          TYPE soli_tab,
+        lv_text          TYPE soli,
+        lo_document      TYPE REF TO cl_document_bcs,
+        lv_att_subject   TYPE sood-objdes,
+        lv_result        TYPE boolean,
+        lo_external_user TYPE REF TO cl_cam_address_bcs.
+
+
+  LOOP AT gt_container INTO gs_container.
+    CLEAR lv_quant.
+    IF  sy-tabix = 1.
+      CONCATENATE TEXT-022 TEXT-023 TEXT-024 TEXT-025 TEXT-026 TEXT-027 TEXT-028 TEXT-029
+      INTO lv_container SEPARATED BY ';'.
+      APPEND lv_container TO lt_container.
+    ENDIF.
+
+    lv_quant  = gs_container-quant.
+
+    CONCATENATE gs_container-dats+6(2)
+                gs_container-dats+4(2)
+                gs_container-dats+0(4)
+           INTO lv_date
+           SEPARATED BY '.'.
+
+
+    CASE gs_container-shift.
+      WHEN '1'.
+        lv_shift_text = TEXT-005.
+      WHEN '2'.
+        lv_shift_text = TEXT-006.
+      WHEN '3'.
+        lv_shift_text = TEXT-007.
+      WHEN OTHERS.
+        lv_shift_text = gs_container-shift.
+    ENDCASE.
+
+
+    CONCATENATE gs_container-cn
+                gs_container-matnr
+                gs_container-maktx
+                lv_quant
+                lv_shift_text
+                lv_date
+                gs_container-usern
+                gs_container-del
+               INTO lv_container
+               SEPARATED BY ';'.
+
+    APPEND lv_container TO lt_container.
+    CLEAR lv_container.
+  ENDLOOP.
+
+  CALL FUNCTION 'SCMS_TEXT_TO_BINARY'
+    TABLES
+      text_tab   = lt_container
+      binary_tab = lt_bin_container
+    EXCEPTIONS
+      failed     = 1
+      OTHERS     = 2.
+  IF sy-subrc <> 0.
+* Implement suitable error handling here
+  ENDIF.
+
+  TRY.
+      CALL METHOD cl_bcs=>create_persistent "request
+        RECEIVING
+          result = lo_bcs.
+    CATCH cx_send_req_bcs INTO DATA(lx_error).
+      MESSAGE lx_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'.
+  ENDTRY.
+
+
+  TRY.
+      CALL METHOD cl_cam_address_bcs=>create_internet_address
+        EXPORTING
+          i_address_string = 'test@gmail.com'
+        RECEIVING
+          result           = lo_external_user.
+    CATCH cx_address_bcs INTO DATA(lx_addr_error).
+      MESSAGE lx_addr_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  TRY.
+      CALL METHOD lo_bcs->add_recipient
+        EXPORTING
+          i_recipient = lo_external_user.
+    CATCH cx_send_req_bcs INTO DATA(lx_rec_error).
+      MESSAGE lx_rec_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  DESCRIBE TABLE lt_container LINES lv_lines.
+
+  CONCATENATE lv_lines+7(3) ' ' TEXT-015 INTO lv_subject.
+
+  CONCATENATE TEXT-016  sy-uname ',' INTO lv_text-line SEPARATED BY ' '.
+  APPEND lv_text TO lt_text.
+
+  CLEAR lv_text.
+  lv_text-line = ' '.  " Rresht bosh
+  APPEND lv_text TO lt_text.
+
+  CLEAR lv_text.
+  CONCATENATE TEXT-017  gs_container-cn ' container.' INTO lv_text-line SEPARATED BY ' '.
+  APPEND lv_text TO lt_text.
+
+  CLEAR lv_text.
+  lv_text-line = ' '.
+  APPEND lv_text TO lt_text.
+
+  CLEAR lv_text.
+  lv_text-line = TEXT-018.
+  APPEND lv_text TO lt_text.
+
+  CLEAR lv_text.
+  lv_text-line = TEXT-019.
+  APPEND lv_text TO lt_text.
+
+  TRY.
+      CALL METHOD cl_document_bcs=>create_document
+        EXPORTING
+          i_type    = 'RAW'
+          i_subject = lv_subject
+          i_text    = lt_text
+        RECEIVING
+          result    = lo_document.
+    CATCH cx_document_bcs INTO DATA(lx_create_error).
+      MESSAGE lx_create_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  CONCATENATE lv_lines+7(3) 'Materials Container' INTO lv_att_subject.
+
+  TRY.
+      CALL METHOD lo_document->add_attachment
+        EXPORTING
+          i_attachment_type    = 'XML'
+          i_attachment_subject = lv_att_subject
+          i_att_content_hex    = lt_bin_container.
+    CATCH cx_document_bcs INTO DATA(lx_add_atta).
+      MESSAGE lx_add_atta->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  TRY.
+      CALL METHOD lo_bcs->set_document
+        EXPORTING
+          i_document = lo_document.
+    CATCH cx_send_req_bcs INTO DATA(lx_atta_error).
+      MESSAGE lx_atta_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  TRY.
+      CALL METHOD lo_bcs->set_send_immediately
+        EXPORTING
+          i_send_immediately = 'X'.
+    CATCH cx_send_req_bcs INTO  DATA(lx_sendnow_error).
+      MESSAGE lx_sendnow_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+
+  TRY.
+      CALL METHOD lo_bcs->send
+        RECEIVING
+          result = lv_result.
+    CATCH cx_send_req_bcs INTO DATA(lx_send_error).
+      MESSAGE lx_send_error->get_text( ) TYPE 'S' DISPLAY LIKE 'E'..
+  ENDTRY.
+
+  IF lv_result IS NOT INITIAL.
+    COMMIT WORK.
+  ENDIF.
+
+  IF  sy-subrc = 0.
+    MESSAGE TEXT-020 TYPE 'S'.
+  ELSE.
+    MESSAGE TEXT-021 TYPE 'E'.
+
+  ENDIF.
+
+ENDFORM.
+
+*&SPWIZARD: DECLARATION OF TABLECONTROL 'CONTAINER' ITSELF
+
+*&SPWIZARD: OUTPUT MODULE FOR TC 'CONTAINER'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: UPDATE LINES FOR EQUIVALENT SCROLLBAR
+MODULE container_change_tc_attr OUTPUT.
+  DESCRIBE TABLE gt_container LINES container-lines.
+ENDMODULE.
+
+*&SPWIZARD: INPUT MODULE FOR TC 'CONTAINER'. DO NOT CHANGE THIS LINE!
+*&SPWIZARD: MODIFY TABLE
+MODULE container_modify INPUT.
+  MODIFY gt_container
+    FROM gs_container
+    INDEX container-current_line.
+ENDMODULE.
+__________________________________________
+
+SCREEN 200 SOURCE CODE
+
+PROCESS BEFORE OUTPUT.
+*&SPWIZARD: PBO FLOW LOGIC FOR TABLECONTROL 'CONTAINER'
+  MODULE CONTAINER_CHANGE_TC_ATTR.
+*&SPWIZARD: MODULE CONTAINER_CHANGE_COL_ATTR.
+  LOOP AT   GT_CONTAINER
+       INTO GS_CONTAINER
+       WITH CONTROL CONTAINER
+       CURSOR CONTAINER-CURRENT_LINE.
+*&SPWIZARD:   MODULE CONTAINER_CHANGE_FIELD_ATTR
+  ENDLOOP.
+
+
+
+MODULE STATUS_0200.
+
+
+PROCESS AFTER INPUT.
+*&SPWIZARD: PAI FLOW LOGIC FOR TABLECONTROL 'CONTAINER'
+  LOOP AT GT_CONTAINER.
+    CHAIN.
+      FIELD GS_CONTAINER-MATNR.
+      FIELD GS_CONTAINER-MAKTX.
+      FIELD GS_CONTAINER-QUANT.
+      FIELD GS_CONTAINER-SHIFT.
+      FIELD GS_CONTAINER-DATS.
+      FIELD GS_CONTAINER-USERN.
+      FIELD GS_CONTAINER-DEL.
+      MODULE CONTAINER_MODIFY ON CHAIN-REQUEST.
+    endchain.
+  ENDLOOP.
+*&SPWIZARD: MODULE CONTAINER_CHANGE_TC_ATTR.
+*&SPWIZARD: MODULE CONTAINER_CHANGE_COL_ATTR.
+
+
