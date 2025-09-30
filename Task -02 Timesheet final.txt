@@ -1,0 +1,800 @@
+SELECTION-SCREEN BEGIN OF BLOCK b01 WITH FRAME TITLE TEXT-001.
+  PARAMETERS: p_year(4)  TYPE n  DEFAULT 2022 OBLIGATORY,
+              p_month(2) TYPE n AS LISTBOX  VISIBLE LENGTH 20  OBLIGATORY DEFAULT 1,
+              p_hide     TYPE c AS CHECKBOX.
+
+  PARAMETERS: rb_reuse RADIOBUTTON GROUP rb1 DEFAULT 'X',
+              rb_grid  RADIOBUTTON GROUP rb1,
+              rb_salv  RADIOBUTTON GROUP rb1.
+SELECTION-SCREEN END OF BLOCK b01.
+
+CLASS lcl_event_reciever DEFINITION.
+  PUBLIC SECTION.
+
+    DATA: mv_selfield TYPE  slis_selfield.
+
+    METHODS:
+      handle_toolbar
+        FOR EVENT toolbar OF cl_gui_alv_grid
+        IMPORTING e_object e_interactive,
+
+      handle_user_command
+        FOR EVENT user_command OF cl_gui_alv_grid
+        IMPORTING e_ucomm.
+
+    METHODS handle_salv_user_command
+      FOR EVENT added_function OF cl_salv_events_table
+      IMPORTING e_salv_function.
+
+ENDCLASS.
+
+CLASS lcl_report DEFINITION.
+
+  PUBLIC SECTION.
+
+    TYPES: BEGIN OF ty_employee,
+             id      TYPE i,
+             name    TYPE string,
+             surname TYPE string,
+           END OF ty_employee.
+
+    TYPES : BEGIN OF ty_timesheet,
+              employeeid  TYPE i,
+              project     TYPE string,
+              overtime(1) TYPE c,
+              date        TYPE d,
+              hours(3)    TYPE p DECIMALS 2,
+            END OF ty_timesheet.
+
+    TYPES: BEGIN OF ty_display,
+             employee(50) TYPE c,
+             project      TYPE string,
+             total_hours  TYPE p DECIMALS 2 LENGTH 3,
+             total_days   TYPE p DECIMALS 2 LENGTH 3,
+             day01        TYPE p DECIMALS 2 LENGTH 3,
+             day02        TYPE p DECIMALS 2 LENGTH 3,
+             day03        TYPE p DECIMALS 2 LENGTH 3,
+             day04        TYPE p DECIMALS 2 LENGTH 3,
+             day05        TYPE p DECIMALS 2 LENGTH 3,
+             day06        TYPE p DECIMALS 2 LENGTH 3,
+             day07        TYPE p DECIMALS 2 LENGTH 3,
+             day08        TYPE p DECIMALS 2 LENGTH 3,
+             day09        TYPE p DECIMALS 2 LENGTH 3,
+             day10        TYPE p DECIMALS 2 LENGTH 3,
+             day11        TYPE p DECIMALS 2 LENGTH 3,
+             day12        TYPE p DECIMALS 2 LENGTH 3,
+             day13        TYPE p DECIMALS 2 LENGTH 3,
+             day14        TYPE p DECIMALS 2 LENGTH 3,
+             day15        TYPE p DECIMALS 2 LENGTH 3,
+             day16        TYPE p DECIMALS 2 LENGTH 3,
+             day17        TYPE p DECIMALS 2 LENGTH 3,
+             day18        TYPE p DECIMALS 2 LENGTH 3,
+             day19        TYPE p DECIMALS 2 LENGTH 3,
+             day20        TYPE p DECIMALS 2 LENGTH 3,
+             day21        TYPE p DECIMALS 2 LENGTH 3,
+             day22        TYPE p DECIMALS 2 LENGTH 3,
+             day23        TYPE p DECIMALS 2 LENGTH 3,
+             day24        TYPE p DECIMALS 2 LENGTH 3,
+             day25        TYPE p DECIMALS 2 LENGTH 3,
+             day26        TYPE p DECIMALS 2 LENGTH 3,
+             day27        TYPE p DECIMALS 2 LENGTH 3,
+             day28        TYPE p DECIMALS 2 LENGTH 3,
+             day29        TYPE p DECIMALS 2 LENGTH 3,
+             day30        TYPE p DECIMALS 2 LENGTH 3,
+             day31        TYPE p DECIMALS 2 LENGTH 3,
+             color        TYPE lvc_t_scol,
+             sel          TYPE c LENGTH 1,
+           END OF ty_display.
+
+    TYPES:BEGIN OF ty_fields,
+            fieldname TYPE fieldname,
+            seltext_m TYPE slis_fieldcat_alv-seltext_m,
+            day_no    TYPE scal-indicator,
+          END OF ty_fields.
+
+    METHODS execute.
+    CLASS-METHODS get_month.
+    METHODS get_timesheet.
+    METHODS disp_option.
+    METHODS build_fcat_buffer.
+    METHODS display_reuse_alv.
+    METHODS display_cl_gui_grid.
+    METHODS display_cl_salv.
+    METHODS disp_sum_reuse.
+    METHODS disp_sum_grid.
+    METHODS disp_sum_salv.
+    METHODS reuse_toggle.
+    METHODS grid_toggle.
+    METHODS salv_toggle.
+
+    DATA: mt_display     TYPE STANDARD TABLE OF ty_display,
+          mo_handler     TYPE REF TO lcl_event_reciever,
+          mv_cols_hidden TYPE abap_bool,
+          mt_fields      TYPE STANDARD TABLE OF ty_fields,
+          mo_grid        TYPE REF TO cl_gui_alv_grid,
+          mo_salv        TYPE REF TO cl_salv_table.
+
+  PRIVATE SECTION.
+
+    DATA:
+      mt_employee  TYPE STANDARD TABLE OF ty_employee,
+      mt_timesheet TYPE TABLE OF ty_timesheet.
+
+ENDCLASS.
+
+
+DATA: go_report TYPE REF TO lcl_report.
+
+CLASS lcl_report IMPLEMENTATION.
+
+  METHOD execute.
+
+    build_fcat_buffer( ).
+    get_timesheet( ).
+    disp_option( ).
+
+  ENDMETHOD.
+
+  METHOD get_month.
+
+    DATA(lt_values) = VALUE vrm_values(
+      ( key = 1 text =  'January' )
+      ( key = 2 text =  'February' )
+      ( key = 3 text =  'March' )
+      ( key = 4 text =  'April' )
+      ( key = 5 text =  'May' )
+      ( key = 6 text =  'June' )
+      ( key = 7 text =  'July' )
+      ( key = 8 text =  'August' )
+      ( key = 9 text =  'September' )
+      ( key = 10 text = 'October' )
+      ( key = 11 text = 'November' )
+      ( key = 12 text = 'December'  )
+    ).
+
+    CALL FUNCTION 'VRM_SET_VALUES'
+      EXPORTING
+        id     = 'P_MONTH'
+        values = lt_values.
+
+  ENDMETHOD.
+
+  METHOD disp_option.
+
+    CASE abap_true.
+      WHEN rb_reuse.
+        display_reuse_alv( ).
+      WHEN rb_grid.
+        display_cl_gui_grid( ).
+      WHEN rb_salv.
+        display_cl_salv( ).
+    ENDCASE.
+
+  ENDMETHOD.
+
+  METHOD build_fcat_buffer.
+
+    DATA: lv_month TYPE t009b-bumon,
+          lv_year  TYPE t009b-bdatj,
+          lv_days  TYPE t009b-butag.
+
+    DATA: lv_date        TYPE scal-date,
+          lv_weekday_txt TYPE string.
+
+    DATA: lv_day         TYPE numc2.
+
+    mv_cols_hidden = p_hide.
+
+    lv_year =  p_year.
+    lv_month = p_month.
+
+    CALL FUNCTION 'NUMBER_OF_DAYS_PER_MONTH_GET'
+      EXPORTING
+        par_month = lv_month
+        par_year  = lv_year
+      IMPORTING
+        par_days  = lv_days.
+
+    mt_fields =  VALUE #(
+                       ( fieldname = 'EMPLOYEE'     seltext_m = 'Employee'  )
+                       ( fieldname = 'PROJECT'      seltext_m = 'Project'   )
+                       ( fieldname = 'TOTAL_HOURS'  seltext_m = 'Hours'     )
+                       ( fieldname = 'TOTAL_DAYS'   seltext_m = 'Days'      ) ).
+
+    DO lv_days TIMES.
+
+      lv_day = sy-index.
+
+      APPEND INITIAL LINE TO mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>).
+      <ls_field>-fieldname = |DAY{ lv_day }|.
+
+      lv_date = |{ lv_year }{ lv_month }{ lv_day }|.
+
+      CALL FUNCTION 'DATE_COMPUTE_DAY'
+        EXPORTING
+          date = lv_date
+        IMPORTING
+          day  = <ls_field>-day_no.
+
+      lv_weekday_txt = SWITCH #( <ls_field>-day_no
+                                WHEN 1 THEN 'Mon'
+                                WHEN 2 THEN 'Tue'
+                                WHEN 3 THEN 'Wed'
+                                WHEN 4 THEN 'Thu'
+                                WHEN 5 THEN 'Fri'
+                                WHEN 6 THEN 'Sat'
+                                WHEN 7 THEN 'Sun'
+                                ).
+
+      <ls_field>-seltext_m = |{ lv_day } { lv_weekday_txt }|.
+
+    ENDDO.
+
+  ENDMETHOD.
+
+  METHOD get_timesheet.
+
+    DATA: ls_display   TYPE ty_display,
+          ls_employee  TYPE ty_employee,
+          lv_day(2)    TYPE n,
+          lv_fieldname TYPE string,
+          ls_cellcolor TYPE lvc_s_scol.
+
+    mt_employee = VALUE #(
+    ( id = 1234 name = 'Filan'  surname = 'Fisteku' )
+    ( id = 32   name = 'Filane' surname = 'Fisteke' )
+    ( id = 54   name = 'Mondi'  surname = 'Nafies' )
+    ( id = 632   name = 'Limi'   surname = 'Feruzes' )
+    ).
+
+    mt_timesheet = VALUE #(
+       ( employeeid = 1234 project = 'Arts' date = '20220102' hours = '5.25' overtime = abap_true  )
+       ( employeeid = 1234 project = 'Arts' date = '20220102' hours = 8 )
+       ( employeeid = 1234 project = 'Arts' date = '20220115' hours = 8 )
+       ( employeeid = 1234 project = 'Arts' date = '20220103' hours = 8 )
+       ( employeeid = 1234 project = 'Arts' date = '20220101' hours = 5 )
+       ( employeeid = 32   project = 'Arts' date = '20220101' hours = 5 )
+       ( employeeid = 54   project = 'Arts' date = '20220103' hours = 5 )
+       ( employeeid = 632  project = 'Arts' date = '20220101' hours = 5 )
+       ( employeeid = 632  project = 'Arts' date = '20220115' hours = 5 )
+       ).
+
+    LOOP AT mt_timesheet INTO DATA(ls_time)
+      GROUP BY ( employeeid = ls_time-employeeid
+                 project    = ls_time-project
+                 overtime   = ls_time-overtime )
+      INTO DATA(lg_time).
+
+      READ TABLE mt_employee INTO ls_employee WITH KEY id = lg_time-employeeid.
+      IF sy-subrc = 0.
+        CONCATENATE ls_employee-name ls_employee-surname INTO ls_display-employee SEPARATED BY space.
+      ENDIF.
+
+      LOOP AT GROUP lg_time INTO DATA(ls_timesh).
+
+        IF ls_timesh-date+0(4) <> p_year OR ls_timesh-date+4(2) <> p_month .
+          CONTINUE.
+        ENDIF.
+
+        ls_display-total_hours = ls_display-total_hours + ls_timesh-hours.
+
+        lv_day = ls_timesh-date+6(2).
+        lv_fieldname = |DAY{ lv_day }|.
+
+        ASSIGN COMPONENT lv_fieldname OF STRUCTURE ls_display TO FIELD-SYMBOL(<lv_day>).
+        IF sy-subrc = 0.
+          <lv_day> = ls_timesh-hours.
+        ENDIF.
+
+        IF ls_timesh-overtime IS NOT INITIAL .
+          CONTINUE.
+        ENDIF.
+
+        IF ls_timesh-hours > 0.
+
+          READ TABLE mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>) WITH KEY fieldname = lv_fieldname.
+
+          CLEAR ls_cellcolor.
+
+          CASE <ls_field>-day_no.
+            WHEN 6 OR 7.
+
+              ls_cellcolor-fname = |DAY{ lv_day }|.
+              ls_cellcolor-color-col = 6.
+              APPEND ls_cellcolor TO ls_display-color.
+          ENDCASE.
+
+        ENDIF.
+
+      ENDLOOP.
+
+      ls_display-project = lg_time-project.
+
+      IF lg_time-overtime IS NOT INITIAL .
+
+        ls_cellcolor-color-col = 6.
+        APPEND ls_cellcolor TO ls_display-color.
+      ENDIF.
+
+      ls_display-total_days = ls_display-total_hours / 8 .
+      APPEND ls_display TO mt_display.
+      CLEAR ls_display.
+
+    ENDLOOP.
+
+  ENDMETHOD.
+
+  METHOD display_reuse_alv.
+
+    DATA: lt_fcat   TYPE slis_t_fieldcat_alv,
+          ls_layout TYPE slis_layout_alv.
+
+    ls_layout = VALUE #(  box_fieldname = 'SEL' zebra = 'X' colwidth_optimize = 'X'  coltab_fieldname = 'COLOR' ).
+
+    lt_fcat = VALUE #( FOR <ls_field> IN mt_fields
+                ( fieldname = <ls_field>-fieldname
+                  seltext_m = <ls_field>-seltext_m
+                  key       = COND #( WHEN <ls_field>-day_no = 0 THEN abap_true )
+                  no_out    = COND #( WHEN mv_cols_hidden = abap_true AND ( <ls_field>-day_no = 6
+                                                                       OR   <ls_field>-day_no = 7 )
+                                      THEN abap_true )
+                 )                ).
+
+    CALL FUNCTION 'REUSE_ALV_GRID_DISPLAY'
+      EXPORTING
+        i_callback_program       = sy-repid
+        i_callback_pf_status_set = 'SET_PF_STATUS'
+        i_callback_user_command  = 'USER_COMMAND'
+        is_layout                = ls_layout
+        it_fieldcat              = lt_fcat
+      TABLES
+        t_outtab                 = mt_display
+      EXCEPTIONS
+        program_error            = 1
+        OTHERS                   = 2.
+    IF sy-subrc <> 0.
+      MESSAGE 'Error displaying ALV' TYPE 'E'.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD  display_cl_gui_grid.
+
+    DATA: ls_lvc_layout TYPE lvc_s_layo,
+          lt_lvc_fcat   TYPE lvc_t_fcat.
+
+    ls_lvc_layout = VALUE #( box_fname = 'SEL' sel_mode = 'D' zebra = 'X' cwidth_opt = 'X'  ctab_fname = 'COLOR'  ).
+
+    lt_lvc_fcat = VALUE #( FOR <ls_field> IN mt_fields
+                ( fieldname = <ls_field>-fieldname
+                  scrtext_m = <ls_field>-seltext_m
+                  key       = COND #( WHEN <ls_field>-day_no = 0 THEN abap_true )
+                  no_out    = COND #( WHEN mv_cols_hidden = abap_true AND ( <ls_field>-day_no = 6
+                                                                       OR   <ls_field>-day_no = 7 )
+                                      THEN abap_true )
+                 )                ).
+
+    CREATE OBJECT mo_grid
+      EXPORTING
+        i_parent = cl_gui_custom_container=>screen0.
+
+    CREATE OBJECT mo_handler.
+    SET HANDLER mo_handler->handle_toolbar FOR mo_grid.
+    SET HANDLER mo_handler->handle_user_command FOR mo_grid.
+
+    CALL METHOD mo_grid->set_table_for_first_display
+      EXPORTING
+        is_layout                     = ls_lvc_layout
+      CHANGING
+        it_outtab                     = mt_display
+        it_fieldcatalog               = lt_lvc_fcat
+      EXCEPTIONS
+        invalid_parameter_combination = 1
+        program_error                 = 2
+        too_many_lines                = 3
+        OTHERS                        = 4.
+    IF sy-subrc <> 0.
+*                 Implement suitable error handling here
+    ENDIF.
+
+    WRITE space.
+
+  ENDMETHOD.
+
+  METHOD display_cl_salv.
+
+    DATA:
+      lo_sel   TYPE REF TO cl_salv_selections,
+      lo_cols  TYPE REF TO cl_salv_columns_table,
+      lo_col   TYPE REF TO cl_salv_column_table,
+      lo_event TYPE REF TO cl_salv_events_table.
+
+    TRY.
+        cl_salv_table=>factory(
+          EXPORTING
+            r_container  = cl_gui_custom_container=>screen0                          " Abstract Container for GUI Controls
+          IMPORTING
+            r_salv_table = mo_salv                          " Basis Class Simple ALV Tables
+          CHANGING
+            t_table      = mt_display
+        ).
+      CATCH cx_salv_msg.
+    ENDTRY.
+
+    CREATE OBJECT mo_handler.
+    lo_event = mo_salv->get_event( ).
+    SET HANDLER mo_handler->handle_salv_user_command FOR lo_event.
+
+    TRY.
+        mo_salv->get_functions( )->add_function(
+          EXPORTING
+            name     = 'FC_SUM'             " ALV Function
+            icon     = CONV #( icon_positive )
+            tooltip  = 'Add'
+            position = if_salv_c_function_position=>right_of_salv_functions             " Positioning Function
+        ).
+      CATCH cx_salv_wrong_call
+           cx_salv_existing.
+    ENDTRY.
+
+    TRY.
+        mo_salv->get_functions( )->add_function(
+          EXPORTING
+            name     = 'FC_SHOW'             " ALV Function
+            icon     =  CONV #( icon_display )
+            tooltip  = 'Show/hide'
+            position = if_salv_c_function_position=>right_of_salv_functions             " Positioning Function
+        ).
+      CATCH cx_salv_wrong_call
+            cx_salv_existing.
+    ENDTRY.
+
+    mo_salv->get_functions( )->set_all( abap_true ).
+
+    mo_salv->get_columns( )->set_optimize( abap_true ).
+
+    lo_sel = mo_salv->get_selections( ).
+    lo_sel->set_selection_mode( if_salv_c_selection_mode=>row_column ).
+
+    lo_cols = mo_salv->get_columns( ).
+
+    TRY.
+        lo_cols->set_color_column( 'COLOR' ).
+
+        lo_col ?= lo_cols->get_column( 'EMPLOYEE' ).
+        lo_col->set_key( ).
+        lo_col->set_medium_text( 'Employee' ).
+
+        lo_col ?= lo_cols->get_column( 'PROJECT' ).
+        lo_col->set_key( ).
+        lo_col->set_medium_text( 'Project' ).
+
+        lo_col ?= lo_cols->get_column( 'TOTAL_HOURS' ).
+        lo_col->set_key( ).
+        lo_col->set_medium_text( 'Total Hours' ).
+
+        lo_col ?= lo_cols->get_column( 'TOTAL_DAYS' ).
+        lo_col->set_key( ).
+        lo_col->set_medium_text( 'Total Days' ).
+
+      CATCH:  cx_salv_data_error,
+              cx_salv_not_found.
+
+    ENDTRY.
+    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>) FROM 5.
+
+      TRY.
+          lo_col ?= lo_cols->get_column( <ls_field>-fieldname ).
+          lo_col->set_medium_text( <ls_field>-seltext_m ).
+
+          IF  ( <ls_field>-day_no = 6 OR <ls_field>-day_no = 7 ) AND p_hide = abap_true.
+            lo_col->set_visible( ).
+
+            CONTINUE.
+          ENDIF.
+        CATCH cx_salv_not_found.
+      ENDTRY.
+    ENDLOOP.
+
+    TRY.
+        lo_cols->get_column( 'SEL' )->set_technical( ).
+
+      CATCH cx_salv_not_found
+           cx_salv_data_error.
+    ENDTRY.
+
+    WRITE space.
+    mo_salv->display( ).
+
+  ENDMETHOD.
+
+  METHOD disp_sum_reuse.
+
+    DATA: lv_total_days  TYPE ty_display-total_days,
+          lv_total_hours TYPE ty_display-total_hours.
+
+    LOOP AT mt_display ASSIGNING FIELD-SYMBOL(<ls_display>) WHERE sel = 'X'.
+      lv_total_days = lv_total_days + <ls_display>-total_days.
+      lv_total_hours = lv_total_hours + <ls_display>-total_hours.
+    ENDLOOP.
+
+    MESSAGE | Sum of days is : { lv_total_days } Sum of hours is : { lv_total_hours } | TYPE 'I'.
+
+  ENDMETHOD.
+
+  METHOD disp_sum_grid.
+
+    DATA: lt_rows      TYPE lvc_t_row,
+          lv_sum_hours TYPE ty_display-total_hours,
+          lv_sum_days  TYPE ty_display-total_days.
+
+    mo_grid->get_selected_rows(
+      IMPORTING
+        et_index_rows = lt_rows               " Indexes of Selected Rows
+    ).
+
+    IF lines( lt_rows ) < 2.
+      MESSAGE 'Select 2 or more records' TYPE 'I'.
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_rows ASSIGNING FIELD-SYMBOL(<ls_rows>).
+      READ TABLE  mt_display ASSIGNING FIELD-SYMBOL(<ls_display>) INDEX <ls_rows>-index.
+
+      IF sy-subrc = 0.
+        lv_sum_hours += <ls_display>-total_hours.
+        lv_sum_days  += <ls_display>-total_days.
+      ENDIF.
+    ENDLOOP.
+
+    MESSAGE |Hours: { lv_sum_hours }. Days: { lv_sum_days }| TYPE 'I'.
+
+  ENDMETHOD.
+
+  METHOD disp_sum_salv.
+
+    DATA: lo_rows      TYPE REF TO cl_salv_selections,
+          lt_rows      TYPE salv_t_row,
+          lv_sum_hours TYPE ty_display-total_hours,
+          lv_sum_days  TYPE ty_display-total_days.
+
+    CLEAR lt_rows.
+    lo_rows = mo_salv->get_selections( ).
+    lt_rows = lo_rows->get_selected_rows( ).
+
+    IF lt_rows IS INITIAL.
+      MESSAGE 'Select 2 or more records' TYPE 'I'.
+      EXIT.
+    ENDIF.
+
+    LOOP AT lt_rows ASSIGNING FIELD-SYMBOL(<ls_rows>).
+      READ TABLE  mt_display ASSIGNING FIELD-SYMBOL(<ls_display>) INDEX <ls_rows>.   "ASSIGNING FIELD-SYMBOL(<ls_display>) INDEX <ls_rows>-index.
+
+      IF sy-subrc = 0.
+        lv_sum_hours += <ls_display>-total_hours.
+        lv_sum_days  += <ls_display>-total_days.
+      ENDIF.
+    ENDLOOP.
+
+    MESSAGE |Hours: { lv_sum_hours }. Days: { lv_sum_days }| TYPE 'I'.
+
+  ENDMETHOD.
+
+  METHOD reuse_toggle.
+
+    DATA: lt_fcat   TYPE slis_t_fieldcat_alv,
+          ls_layout TYPE slis_layout_alv.
+
+    CALL FUNCTION 'REUSE_ALV_GRID_LAYOUT_INFO_GET'
+      IMPORTING
+        es_layout     = ls_layout
+        et_fieldcat   = lt_fcat
+      EXCEPTIONS
+        no_infos      = 1
+        program_error = 2
+        OTHERS        = 3.
+    IF sy-subrc <> 0.
+* Implement suitable error handling here
+    ENDIF.
+
+    IF mv_cols_hidden = abap_true.
+      mv_cols_hidden = abap_false.
+      DATA(lv_visible) = abap_false.
+    ELSE.
+      mv_cols_hidden = abap_true.
+      lv_visible = abap_true.
+    ENDIF.
+
+    ls_layout-colwidth_optimize = abap_true.
+
+    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>) FROM 5.
+      DATA(lv_index) = sy-tabix.
+
+      READ TABLE lt_fcat ASSIGNING FIELD-SYMBOL(<ls_fcat>) WITH KEY fieldname = <ls_field>-fieldname.
+      IF sy-subrc = 0.
+        <ls_fcat>-col_pos = lv_index.
+
+        IF <ls_field>-day_no = 6 OR <ls_field>-day_no = 7.
+          <ls_fcat>-no_out = lv_visible.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    CALL FUNCTION 'REUSE_ALV_GRID_LAYOUT_INFO_SET'
+      EXPORTING
+        is_layout   = ls_layout
+        it_fieldcat = lt_fcat.
+
+  ENDMETHOD.
+
+  METHOD grid_toggle.
+
+    mo_grid->get_frontend_fieldcatalog(
+      IMPORTING
+        et_fieldcatalog = DATA(lt_fieldcat) ).
+
+    IF mv_cols_hidden = abap_true.
+      mv_cols_hidden = abap_false.
+      DATA(lv_visible) = abap_false.
+    ELSE.
+      mv_cols_hidden = abap_true.
+      lv_visible = abap_true.
+    ENDIF.
+
+    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>) FROM 5.
+
+      DATA(lv_index) = sy-tabix.
+
+      READ TABLE lt_fieldcat ASSIGNING FIELD-SYMBOL(<ls_fcat>) WITH KEY fieldname = <ls_field>-fieldname.
+      IF sy-subrc = 0.
+        <ls_fcat>-col_pos = lv_index.
+
+        IF <ls_field>-day_no = 6 OR <ls_field>-day_no = 7.
+          <ls_fcat>-no_out = lv_visible.
+        ENDIF.
+      ENDIF.
+    ENDLOOP.
+
+    mo_grid->set_frontend_fieldcatalog( it_fieldcatalog = lt_fieldcat ).
+
+    mo_grid->refresh_table_display(
+      EXCEPTIONS
+        finished = 1                " Display was Ended (by Export)
+        OTHERS   = 2
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD salv_toggle.
+
+    DATA: lv_visible TYPE abap_bool,
+          lo_columns TYPE REF TO cl_salv_columns,
+          lo_column  TYPE REF TO cl_salv_column.
+
+    lo_columns = mo_salv->get_columns( ).
+
+    IF mv_cols_hidden = abap_true.
+      mv_cols_hidden = abap_false.
+      lv_visible = abap_true.
+    ELSE.
+      mv_cols_hidden = abap_true.
+      lv_visible = abap_false.
+    ENDIF.
+
+    LOOP AT mt_fields ASSIGNING FIELD-SYMBOL(<ls_field>) FROM 5.
+
+      DATA(lv_index) = sy-tabix.
+
+      lo_columns->set_column_position(
+        EXPORTING
+          columnname = <ls_field>-fieldname
+          position   = lv_index
+      ).
+
+      IF <ls_field>-day_no = 6 OR <ls_field>-day_no = 7.
+        TRY.
+            lo_column = lo_columns->get_column( <ls_field>-fieldname ).
+            lo_column->set_visible( lv_visible ).
+          CATCH cx_salv_not_found.
+            CONTINUE.
+        ENDTRY.
+      ENDIF.
+
+    ENDLOOP.
+
+    mo_salv->refresh( ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lcl_event_reciever IMPLEMENTATION.
+
+  METHOD handle_toolbar.
+
+    DATA: ls_toolbar  TYPE stb_button.
+
+    CLEAR ls_toolbar.
+    ls_toolbar-butn_type = 3.
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+
+    CLEAR ls_toolbar.
+    ls_toolbar-function = 'FC_SUM'.
+    ls_toolbar-icon = icon_positive.
+    ls_toolbar-quickinfo = 'ADD'.
+    ls_toolbar-disabled = ' '.
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+
+    CLEAR ls_toolbar.
+    ls_toolbar-function = 'FC_SHOW'.
+    ls_toolbar-icon = icon_display.
+    ls_toolbar-quickinfo = 'Hide/show'.
+    ls_toolbar-disabled = ' '.
+    APPEND ls_toolbar TO e_object->mt_toolbar.
+
+  ENDMETHOD.
+
+  METHOD handle_user_command.
+
+    CASE e_ucomm.
+      WHEN 'FC_SUM'.
+        go_report->disp_sum_grid( ).
+
+      WHEN  'FC_SHOW'.
+        go_report->grid_toggle( ).
+
+    ENDCASE.
+  ENDMETHOD.
+
+  METHOD handle_salv_user_command.
+
+    CASE e_salv_function.
+      WHEN 'FC_SUM'.
+
+        go_report->disp_sum_salv( ).
+
+      WHEN 'FC_SHOW'.
+
+        go_report->salv_toggle( ).
+
+    ENDCASE.
+  ENDMETHOD.
+
+ENDCLASS.
+
+INITIALIZATION.
+
+  lcl_report=>get_month( ).
+
+START-OF-SELECTION.
+
+  CREATE OBJECT go_report.
+  go_report->execute( ).
+
+FORM set_pf_status USING rt_extab TYPE slis_t_extab.
+  SET PF-STATUS 'ZSTANDART'.
+ENDFORM.
+
+FORM user_command USING r_ucomm TYPE sy-ucomm
+                         rs_selfield TYPE slis_selfield.
+
+  CASE r_ucomm.
+    WHEN 'FC_SUM'.
+
+      go_report->disp_sum_reuse( ).
+
+    WHEN 'FC_SHOW'.
+
+      go_report->reuse_toggle( ).
+
+      rs_selfield-refresh = abap_true.
+
+  ENDCASE.
+
+ENDFORM.
+
+
