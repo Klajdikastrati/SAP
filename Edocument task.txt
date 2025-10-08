@@ -1,0 +1,1094 @@
+CLASS lcl_filter_area DEFINITION FINAL.
+
+  PUBLIC SECTION.
+    METHODS constructor IMPORTING io_container TYPE REF TO cl_gui_container.
+
+    METHODS on_sel_parameter_input FOR EVENT entered OF cl_dd_input_element
+      IMPORTING sender.
+
+        EVENTS: filter_area EXPORTING VALUE(iv_source_key) TYPE char50
+                                  VALUE(iv_days)       TYPE i.
+
+
+    DATA: mo_param_source_key TYPE REF TO cl_dd_input_element,
+          mo_param_days       TYPE REF TO cl_dd_input_element,
+          MO_VARIANT_LISTBOX  TYPE REF TO CL_DD_SELECT_ELEMENT.
+
+ENDCLASS.
+
+CLASS lcl_dynamic_menu DEFINITION FINAL.
+  PUBLIC SECTION.
+
+    METHODS constructor IMPORTING io_container TYPE REF TO cl_gui_container.
+
+
+ENDCLASS.
+
+
+CLASS lcl_tree DEFINITION FINAL.
+
+  PUBLIC SECTION.
+    METHODS constructor IMPORTING io_container TYPE REF TO cl_gui_container.
+
+    TYPES: BEGIN OF ty_tree_documents,
+
+             comp_code TYPE ekko-bukrs,
+             doc_no    TYPE ekko-ebeln,
+             doc_node  TYPE lvc_nkey,
+             no        TYPE i,                      " Number of Results
+           END OF ty_tree_documents.
+
+    TYPES: BEGIN OF ty_tree_company,
+             comp_code TYPE ekko-bukrs,
+             comp_node TYPE lvc_nkey,
+           END OF ty_tree_company.
+
+    METHODS handle_node_link_click FOR EVENT link_click OF cl_gui_alv_tree
+      IMPORTING node_key.
+
+    METHODS filter_tree IMPORTING iv_source_key TYPE char50
+                                  iv_days       TYPE i.
+    METHODS fill_itable.
+
+    DATA: mo_tree           TYPE REF TO cl_gui_alv_tree,
+          mt_tree_documents TYPE STANDARD TABLE OF ty_tree_documents,
+          mt_tree_company   TYPE STANDARD TABLE OF ty_tree_company.
+
+ENDCLASS.
+
+CLASS lcl_toolbar DEFINITION FINAL.
+  PUBLIC SECTION.
+    METHODS constructor IMPORTING io_container TYPE REF TO cl_gui_container.
+
+    METHODS handle_registered_events FOR EVENT function_selected OF cl_gui_toolbar
+      IMPORTING fcode.
+
+ENDCLASS.
+
+CLASS lcl_grid DEFINITION FINAL.
+  PUBLIC SECTION.
+    METHODS constructor IMPORTING io_container TYPE REF TO cl_gui_container.
+
+    METHODS refresh_display.
+
+    METHODS filter_grid IMPORTING iv_source_key TYPE char50
+                                  iv_days       TYPE i.
+    METHODS do_sum.
+
+    DATA: mo_grid   TYPE REF TO cl_gui_alv_grid.
+
+ENDCLASS.
+
+CLASS lcl_report DEFINITION FINAL.
+  PUBLIC SECTION.
+
+    TYPES: BEGIN OF ty_record,
+             doc_no       TYPE ekko-ebeln,
+             item_no      TYPE ekpo-ebelp,
+             descr_txt    TYPE ekpo-txz01,
+             creation_day TYPE ekko-aedat,
+             net_price    TYPE ekpo-netpr,
+             ord_value    TYPE ekpo-netwr,
+             comp_code    TYPE ekko-bukrs,
+             doc_type     TYPE ekko-bsart,
+             usern        TYPE ekko-ernam,
+           END OF ty_record.
+
+    METHODS constructor.
+    METHODS pai_500 IMPORTING iv_ok_code TYPE sy-ucomm.
+
+    METHODS refresh_grid.
+    METHODS fill_empty_itab.
+    METHODS handle_menu_btn.
+
+    DATA:   mt_record   TYPE STANDARD TABLE OF ty_record.
+
+
+    METHODS handle_filter_area FOR EVENT filter_area OF lcl_filter_area
+      IMPORTING iv_source_key iv_days.
+
+  PROTECTED SECTION.
+
+    DATA: mo_split_main   TYPE REF TO cl_gui_splitter_container,
+          mo_filter_area  TYPE REF TO lcl_filter_area,
+          mo_dynamic_menu TYPE REF TO lcl_dynamic_menu,
+          mo_tree         TYPE REF TO lcl_tree,
+          mo_toolbar      TYPE REF TO lcl_toolbar,
+          mo_grid         TYPE REF TO lcl_grid,
+          mv_fullscreen   TYPE abap_bool.
+
+    METHODS toggle_fullscreen.
+    METHODS init_left_container IMPORTING io_cont TYPE REF TO cl_gui_container.
+    METHODS init_right_container IMPORTING io_cont TYPE REF TO cl_gui_container.
+ENDCLASS.
+
+DATA: BEGIN OF gs_screen_500,
+        ok_code TYPE sy-ucomm,
+      END OF gs_screen_500,
+      go_report TYPE REF TO lcl_report.
+
+
+*&---------------------------------------------------------------------*
+*& Include          ZKK_EDOCUMENT_REPORT_IMPL
+*&---------------------------------------------------------------------*
+
+CLASS lcl_filter_area IMPLEMENTATION.
+  METHOD constructor.
+
+    DATA: lt_event       TYPE cntl_simple_events,
+          lv_uiflag      TYPE i,
+          lo_form        TYPE REF TO cl_dd_form_area,
+          lo_document    TYPE REF TO cl_dd_document,
+          lo_html_viewer TYPE REF TO cl_gui_html_viewer,
+          ls_variant_details TYPE edoc_variant_details,
+          lt_value           TYPE TABLE OF sdydo_option,
+          ls_value           LIKE LINE OF lt_value.
+
+    lv_uiflag = cl_gui_html_viewer=>uiflag_no3dborder +
+                cl_gui_html_viewer=>uiflag_noiemenu +
+                cl_gui_html_viewer=>uiflag_use_sapgui_charset.
+
+    CREATE OBJECT lo_html_viewer
+      EXPORTING
+        parent = io_container
+        uiflag = lv_uiflag.
+    IF lo_html_viewer IS NOT BOUND.
+      MESSAGE s067(edocument) WITH 'CL_GUI_HTML_VIEWER' DISPLAY LIKE 'E'.
+      RETURN.
+    ENDIF.
+
+    CREATE OBJECT lo_document
+      EXPORTING
+        no_margins = abap_true.
+    IF lo_document IS NOT BOUND.
+      FREE lo_html_viewer.
+      MESSAGE s067(edocument) WITH 'CL_DD_DOCUMENT' DISPLAY LIKE 'E'.
+      RETURN.
+    ENDIF.
+
+    lo_document->html_control = lo_html_viewer.
+
+    lo_document->add_form( IMPORTING formarea = lo_form ).
+    IF lo_form IS NOT BOUND.
+      MESSAGE s067(edocument) WITH 'CL_DD_FORM_AREA' DISPLAY LIKE 'E'.
+      RETURN.
+    ENDIF.
+
+    lo_document->line_with_layout( start = 'X' ).
+    lo_document->no_linebreak( start = 'X' ).
+
+    lo_form->add_text( EXPORTING text = 'Document No.' ).
+    lo_form->add_gap( EXPORTING width = 1 ).
+
+    lo_form->add_input_element(
+      EXPORTING
+        name          = 'SOURCE_KEY'
+        a11y_label    = 'Document No.'
+        tooltip       = 'Document No.'
+        size          = 15
+        maxlength     = 45
+      IMPORTING
+        input_element = mo_param_source_key ).
+
+    SET HANDLER on_sel_parameter_input FOR mo_param_source_key.
+
+    lo_form->new_line( ).
+
+    lo_form->add_text( EXPORTING text = 'Recent Doc.' ).
+
+    lo_form->add_gap(
+      EXPORTING
+        width = 4 ).           " Width of Gap (Number of Spaces)
+
+    lo_form->add_input_element(
+      EXPORTING
+        size          = 2
+        name          = 'RECENT_DAYS'
+        a11y_label    = 'Recent Documents'
+        tooltip       = 'Recent Documents'
+      IMPORTING
+        input_element = mo_param_days
+    ).
+    lo_form->add_text( text = 'Days' ).
+
+        lo_form->new_line( ).
+
+    SET HANDLER on_sel_parameter_input FOR mo_param_days.
+
+    lo_form->add_text( text = 'Variants' ).
+
+    lo_form->add_gap( EXPORTING width = 8 ).
+
+    CLEAR ls_value.
+    ls_value-text = '1'.
+    APPEND ls_value TO lt_value.
+
+    CLEAR ls_value.
+    ls_value-text = '2'.
+    APPEND ls_value TO lt_value.
+
+    CLEAR ls_value.
+    ls_value-text = '3'.
+    APPEND ls_value TO lt_value.
+
+
+    lo_form->add_select_element(
+      EXPORTING
+        name           =  'Variants'                " Name (You Can Use Any Name You Choose)
+        value          =  ls_value-value                " Initially Selected Option
+        options        =  lt_value                " Options (Selectable Items)
+      IMPORTING
+        select_element =  MO_VARIANT_LISTBOX                " Selection Element
+    ).
+
+
+    lt_event = VALUE #( ( eventid = lo_html_viewer->m_id_sapevent ) ).
+    lo_document->html_control->set_registered_events( lt_event ).
+
+    LOOP AT lo_document->html_table ASSIGNING FIELD-SYMBOL(<ls_html>) WHERE line CS '<body'.
+      REPLACE '<body' WITH  '<body scroll="no"' INTO <ls_html>-line.
+      EXIT.
+    ENDLOOP.
+
+    lo_document->merge_document( ).
+
+    lo_document->display_document(
+      EXPORTING
+        reuse_control      = abap_true
+        reuse_registration = abap_true
+      EXCEPTIONS
+        html_display_error = 1                " Error Displaying the Document in the HTML Control
+        OTHERS             = 2
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+      WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+  ENDMETHOD.
+  METHOD on_sel_parameter_input.
+
+    RAISE EVENT filter_area
+      EXPORTING
+        iv_source_key = CONV #( mo_param_source_key->value )
+        iv_days       = CONV #( mo_param_days->value ) .
+  ENDMETHOD.
+ENDCLASS.
+
+CLASS lcl_dynamic_menu IMPLEMENTATION.
+
+  METHOD constructor.
+
+    DATA: lo_top_toolbar   TYPE REF TO cl_gui_toolbar,
+          ct_expand        TYPE REF TO cl_ctmenu,
+          lv_buttons_data  TYPE ttb_button,
+          lv_button_data   TYPE LINE OF ttb_button,
+          lv_table_ctxmenu TYPE ttb_btnmnu,
+          lv_ctxmenu       TYPE LINE OF ttb_btnmnu,
+          lv_events        TYPE cntl_simple_events,
+          lv_event         TYPE cntl_simple_event.
+
+    DATA(lo_toolbar_cont) = io_container.
+
+    CREATE OBJECT lo_top_toolbar EXPORTING parent = lo_toolbar_cont.
+
+    lv_button_data-function = 'EXPAND'.
+    lv_button_data-icon = '@3S@'.
+    lv_button_data-quickinfo = 'Menu'.
+    lv_button_data-text = 'Menu'.
+    lv_button_data-butn_type = cntb_btype_menu.
+    APPEND lv_button_data TO lv_buttons_data.
+
+
+    lo_top_toolbar->add_button_group(
+      EXPORTING
+        data_table       = lv_buttons_data              " Table for button data
+      EXCEPTIONS
+        dp_error         = 1                " Error in DP Call
+        cntb_error_fcode = 2                " Wrong F Code
+        OTHERS           = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    CREATE OBJECT ct_expand.
+
+    CALL METHOD ct_expand->add_function
+      EXPORTING
+        fcode = 'FC_MODIFY'
+        text  = 'Modify'.
+
+    lv_ctxmenu-function = 'EXPAND'.
+    lv_ctxmenu-ctmenu = ct_expand.
+
+    APPEND lv_ctxmenu TO lv_table_ctxmenu.
+
+    CALL METHOD ct_expand->add_function
+      EXPORTING
+        fcode = 'FC_NEW'
+        text  = 'New'.
+
+    lv_ctxmenu-function = 'EXPAND'.
+    lv_ctxmenu-ctmenu = ct_expand.
+
+    APPEND lv_ctxmenu TO lv_table_ctxmenu.
+
+    lo_top_toolbar->assign_static_ctxmenu_table(
+      EXPORTING
+        table_ctxmenu = lv_table_ctxmenu ).
+
+    lv_event-eventid = cl_gui_toolbar=>m_id_function_selected.
+    lv_event-appl_event = ' '.
+    APPEND lv_event TO lv_events.
+
+    lo_top_toolbar->set_registered_events(
+      EXPORTING
+        events = lv_events ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lcl_tree IMPLEMENTATION.
+  METHOD constructor.
+
+    DATA: ls_header         TYPE treev_hhdr,
+          lt_fieldcat       TYPE lvc_t_fcat,
+          ls_fieldcat       TYPE lvc_s_fcat,
+          lv_node_key       TYPE lvc_nkey,
+          lv_child_key1     TYPE lvc_nkey,
+          lv_child_key2     TYPE lvc_nkey,
+          lv_node_text      TYPE lvc_value,
+          lt_events         TYPE cntl_simple_events,
+          ls_event          TYPE cntl_simple_event,
+          lt_tree_documents TYPE STANDARD TABLE OF ty_tree_documents,
+          ls_tree_documents TYPE  ty_tree_documents,
+          lt_nodes          TYPE lvc_t_nkey.
+
+    DATA(lo_tree_cont) = io_container.
+
+    IF mo_tree IS NOT BOUND.
+      CREATE OBJECT mo_tree
+        EXPORTING
+          parent                      = lo_tree_cont
+          node_selection_mode         = cl_gui_column_tree=>node_sel_mode_single
+          item_selection              = 'X'    " Can Individual Items be Selected?
+          no_toolbar                  = 'X'    " NO_TOOLBAR
+          no_html_header              = 'X'    " NO_HTML_HEADER
+        EXCEPTIONS
+          cntl_error                  = 1
+          cntl_system_error           = 2
+          create_error                = 3
+          lifetime_error              = 4
+          illegal_node_selection_mode = 5
+          failed                      = 6
+          illegal_column_name         = 7
+          OTHERS                      = 8.
+    ENDIF.
+
+    mt_tree_company = VALUE #( ( comp_code = 'MICA'   )
+                               ( comp_code = '9001'   ) ).
+
+    ls_header-heading = 'Results Summary'.
+    ls_header-width = 40.
+
+    ls_fieldcat-fieldname = 'NO'.
+    ls_fieldcat-coltext = 'No.'.
+    ls_fieldcat-outputlen = 10.
+    ls_fieldcat-do_sum = abap_true.
+    ls_fieldcat-hotspot = abap_true.
+    APPEND ls_fieldcat TO lt_fieldcat.
+
+    mo_tree->get_registered_events( IMPORTING events = lt_events ).
+
+    ls_event-eventid   = cl_gui_column_tree=>eventid_header_click.
+    ls_event-appl_event = abap_true.
+    APPEND ls_event TO lt_events.
+
+    ls_event-eventid   = cl_gui_column_tree=>eventid_link_click.
+    ls_event-appl_event = abap_true.
+    APPEND ls_event TO lt_events.
+
+    mo_tree->set_registered_events( EXPORTING events = lt_events ).
+
+    mo_tree->set_table_for_first_display(
+      EXPORTING
+        is_hierarchy_header = ls_header
+      CHANGING
+        it_fieldcatalog     = lt_fieldcat
+        it_outtab           = mt_tree_documents ).
+
+    SELECT ekko~bukrs, ekko~ebeln
+    FROM ekko
+    INTO TABLE @lt_tree_documents
+    FOR ALL ENTRIES IN @mt_tree_company
+    WHERE ekko~bukrs = @mt_tree_company-comp_code.
+
+    ls_tree_documents-no = sy-dbcnt.
+
+    DATA(it_item_layout) = VALUE lvc_t_layi( ( fieldname = mo_tree->c_hierarchy_column_name
+                                                  class     = cl_gui_column_tree=>item_class_link )
+                                                  ( fieldname = 'NO'
+                                                  class     = cl_gui_column_tree=>item_class_link ) ).
+    mo_tree->add_node(
+      EXPORTING
+        i_relat_node_key     = ' '              " Node Already in Tree Hierarchy
+        i_relationship       = cl_gui_column_tree=>relat_last_child             " How to Insert Node
+        i_node_text          = 'Document no.'
+        is_outtab_line       = ls_tree_documents
+        it_item_layout       = it_item_layout
+      IMPORTING
+        e_new_node_key       = lv_node_key               " Key of New Node Key
+      EXCEPTIONS
+        relat_node_not_found = 1                " Relat Node Key not Found
+        node_not_found       = 2                " Node not Found
+        OTHERS               = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    LOOP AT mt_tree_company ASSIGNING FIELD-SYMBOL(<ls_tree_comp>).
+
+      CLEAR ls_tree_documents.
+      LOOP AT lt_tree_documents ASSIGNING FIELD-SYMBOL(<ls_tree_doc>) WHERE comp_code = <ls_tree_comp>-comp_code.
+
+        ls_tree_documents-no += 1.
+
+      ENDLOOP.
+      mo_tree->add_node(
+        EXPORTING
+          i_relat_node_key     = lv_node_key              " Node Already in Tree Hierarchy
+          i_relationship       = cl_gui_column_tree=>relat_last_child             " How to Insert Node
+          i_node_text          = CONV #( <ls_tree_comp>-comp_code )
+          is_outtab_line       = ls_tree_documents
+          it_item_layout       = it_item_layout
+        IMPORTING
+          e_new_node_key       = lv_child_key1               " Key of New Node Key
+        EXCEPTIONS
+          relat_node_not_found = 1                " Relat Node Key not Found
+          node_not_found       = 2                " Node not Found
+          OTHERS               = 3
+      ).
+      IF sy-subrc <> 0.
+        MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+          WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+      ENDIF.
+
+      <ls_tree_comp>-comp_node = lv_child_key1.
+
+      LOOP AT lt_tree_documents ASSIGNING <ls_tree_doc> WHERE comp_code = <ls_tree_comp>-comp_code.
+
+        lv_node_text = <ls_tree_doc>-doc_no.
+
+        mo_tree->add_node(
+          EXPORTING
+            i_relat_node_key     = lv_child_key1              " Node Already in Tree Hierarchy
+            i_relationship       = cl_gui_column_tree=>relat_last_child             " How to Insert Node
+            i_node_text          = lv_node_text
+            it_item_layout       = it_item_layout
+          IMPORTING
+            e_new_node_key       = lv_child_key2              " Key of New Node Key
+          EXCEPTIONS
+            relat_node_not_found = 1                " Relat Node Key not Found
+            node_not_found       = 2                " Node not Found
+            OTHERS               = 3
+        ).
+        IF sy-subrc <> 0.
+          MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+            WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+        ENDIF.
+
+        CLEAR:  lv_node_text.  "lv_child_key2,
+      ENDLOOP.
+    ENDLOOP.
+
+    lt_nodes = VALUE #( ( lv_node_key ) ).
+
+    mo_tree->expand_nodes(
+      EXPORTING
+        it_node_key             = lt_nodes                " Node Key
+      EXCEPTIONS
+        failed                  = 1                " General Error
+        cntl_system_error       = 2                " "
+        error_in_node_key_table = 3                " Node Table Contains Errors
+        dp_error                = 4                " Error in Data Provider
+        node_not_found          = 5                " node_not_found
+        OTHERS                  = 6
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    SET HANDLER handle_node_link_click FOR mo_tree.
+
+    cl_gui_cfw=>flush( ).
+    mo_tree->frontend_update( ).
+
+  ENDMETHOD.
+
+  METHOD handle_node_link_click.
+
+    DATA : lv_text    TYPE lvc_value,
+           lv_parent1 TYPE lvc_nkey,
+           lv_first   TYPE lvc_nkey VALUE 1,
+           lr_bukrs   TYPE RANGE OF ekko-bukrs,
+           lr_ebeln   TYPE RANGE OF ekko-ebeln.
+
+    mo_tree->get_outtab_line(
+      EXPORTING
+        i_node_key     = node_key                 " Node Key
+      IMPORTING
+        e_node_text    = lv_text                  " node text
+      EXCEPTIONS
+        node_not_found = 1                " Node does not exist
+        OTHERS         = 2
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    IF node_key = lv_first.
+      lr_bukrs = VALUE #( sign = 'I' option = 'EQ' ( low = 'MICA' ) ( low = '9001' ) ).
+    ELSE.
+      mo_tree->get_parent(
+        EXPORTING
+          i_node_key        = node_key                " Node
+        IMPORTING
+          e_parent_node_key = lv_parent1              " Parent
+      ).
+
+      IF lv_parent1 = lv_first.
+
+        lr_bukrs = VALUE #( sign = 'I' option = 'EQ' ( low = lv_text )  ).
+
+      ELSE.
+
+        lr_ebeln = VALUE #( sign = 'I' option = 'EQ' ( low = lv_text )  ).
+
+      ENDIF.
+
+    ENDIF.
+
+    SELECT ekko~ebeln,
+     ekpo~ebelp,
+     ekpo~txz01,
+     ekko~aedat,
+     ekpo~netpr,
+     ekpo~netwr,
+     ekko~bukrs,
+     ekko~bsart,
+     ekko~ernam
+  FROM ekko
+  JOIN ekpo ON ekko~ebeln = ekpo~ebeln
+  INTO TABLE @go_report->mt_record
+  WHERE ekko~ebeln IN @lr_ebeln
+    AND ekko~bukrs IN @lr_bukrs.
+
+    go_report->refresh_grid( ).
+
+  ENDMETHOD.
+
+  METHOD filter_tree.
+
+  ENDMETHOD.
+
+  METHOD fill_itable.
+
+    SELECT ekko~ebeln,
+           ekpo~ebelp,
+           ekpo~txz01,
+           ekko~aedat,
+           ekpo~netpr,
+           ekpo~netwr,
+           ekko~bukrs,
+           ekko~bsart,
+           ekko~ernam
+     FROM ekko
+          JOIN ekpo ON ekko~ebeln = ekpo~ebeln
+          INTO TABLE @go_report->mt_record
+       FOR ALL ENTRIES IN @mt_tree_company
+      WHERE ekko~bukrs = @mt_tree_company-comp_code.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lcl_toolbar IMPLEMENTATION.
+  METHOD constructor.
+
+    DATA: ct_expand        TYPE REF TO cl_ctmenu,
+          lv_buttons_data  TYPE ttb_button,
+          lv_button_data   TYPE LINE OF ttb_button,
+          lv_table_ctxmenu TYPE ttb_btnmnu,
+          lv_ctxmenu       TYPE LINE OF ttb_btnmnu,
+          lv_events        TYPE cntl_simple_events,
+          lv_event         TYPE cntl_simple_event,
+          lo_top_toolbar   TYPE REF TO cl_gui_toolbar.
+
+    DATA(lo_toolbar_cont) = io_container.
+
+    CREATE OBJECT lo_top_toolbar EXPORTING parent = lo_toolbar_cont.
+
+    lv_button_data-function = 'EXPAND'.
+    lv_button_data-icon = '@3S@'.
+    lv_button_data-quickinfo = 'Menu'.
+    lv_button_data-text = 'Menu'.
+    lv_button_data-butn_type = cntb_btype_menu.
+    APPEND lv_button_data TO lv_buttons_data.
+
+    lo_top_toolbar->add_button_group(
+      EXPORTING
+        data_table       = lv_buttons_data              " Table for button data
+      EXCEPTIONS
+        dp_error         = 1                " Error in DP Call
+        cntb_error_fcode = 2                " Wrong F Code
+        OTHERS           = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    CREATE OBJECT ct_expand.
+
+    CALL METHOD ct_expand->add_function
+      EXPORTING
+        fcode = 'FC_SUM'
+        text  = 'SUM'.
+    
+    lv_ctxmenu-function = 'EXPAND'.
+    lv_ctxmenu-ctmenu = ct_expand.
+
+    APPEND lv_ctxmenu TO lv_table_ctxmenu.
+
+    lo_top_toolbar->assign_static_ctxmenu_table(
+      EXPORTING
+        table_ctxmenu = lv_table_ctxmenu ).
+
+    lv_event-eventid = cl_gui_toolbar=>m_id_function_selected.
+    lv_event-appl_event = ' '.
+    APPEND lv_event TO lv_events.
+
+    lo_top_toolbar->set_registered_events(
+      EXPORTING
+        events = lv_events ).
+
+    SET HANDLER handle_registered_events FOR lo_top_toolbar.
+
+  ENDMETHOD.
+
+  METHOD handle_registered_events.
+
+    go_report->handle_menu_btn( ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lcl_grid IMPLEMENTATION.
+  METHOD constructor.
+
+    DATA: lo_handler TYPE REF TO lcl_report,
+          ls_layout  TYPE lvc_s_layo,
+          lt_fcat    TYPE lvc_t_fcat.
+
+    DATA(lo_grid_cont) =   io_container. 
+
+    ls_layout = VALUE #( box_fname = 'SEL' sel_mode = 'D' zebra = 'X'  ).
+
+    lt_fcat = VALUE #( ( fieldname = 'DOC_NO'    coltext = 'Document'     key = abap_true   )
+    ( fieldname = 'ITEM_NO'   coltext = 'Item'         key = abap_true  )
+    ( fieldname = 'DESCR_TXT' coltext = 'Description'                   )
+    ( fieldname = 'CREATION_DAY' coltext = 'Creation day'       )
+    ( fieldname = 'NET_PRICE' coltext = 'Net Price'   )
+    ( fieldname = 'ORD_VALUE' coltext = 'Order Value'              )
+    ( fieldname = 'COMP_CODE' coltext = 'Company'     )
+    ( fieldname = 'DOC_TYPE'  coltext = 'Type'        )
+    ( fieldname = 'USERN'     coltext = 'Created By' )
+  ).
+
+    mo_grid = NEW cl_gui_alv_grid(
+      i_parent = lo_grid_cont
+    ).
+
+    CALL METHOD mo_grid->set_table_for_first_display
+      EXPORTING
+        is_layout                     = ls_layout
+      CHANGING
+        it_outtab                     = go_report->mt_record
+        it_fieldcatalog               = lt_fcat
+      EXCEPTIONS
+        invalid_parameter_combination = 1
+        program_error                 = 2
+        too_many_lines                = 3
+        OTHERS                        = 4.
+    IF sy-subrc <> 0.
+      " Implement suitable error handling here
+    ENDIF.
+
+    WRITE space.
+
+  ENDMETHOD.
+
+  METHOD refresh_display.
+
+    mo_grid->refresh_table_display(
+      EXCEPTIONS
+        finished = 1                " Display was Ended (by Export)
+        OTHERS   = 2
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD filter_grid.
+
+    DATA: lo_input TYPE REF TO cl_dd_input_element,
+          lv_ebeln TYPE ekko-ebeln,
+          lv_name  TYPE sdydo_element_name,
+          lv_days  TYPE i,
+          lv_check TYPE sy-datum.
+
+    lv_ebeln = |{ iv_source_key ALPHA = IN }|.
+
+    IF lv_ebeln IS NOT INITIAL.
+
+      SELECT ekko~ebeln,
+            ekpo~ebelp,
+            ekpo~txz01,
+            ekko~aedat,
+            ekpo~netpr,
+            ekpo~netwr,
+            ekko~bukrs,
+            ekko~bsart,
+            ekko~ernam
+ FROM ekko
+ JOIN ekpo ON ekko~ebeln = ekpo~ebeln
+  INTO TABLE @go_report->mt_record
+    WHERE ekko~ebeln = @lv_ebeln.
+    ENDIF.
+
+    IF sy-subrc <> 0.
+*      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+*        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    lv_days = iv_days.
+    lv_check = sy-datum - lv_days.
+
+    IF lv_days IS NOT INITIAL.
+
+      IF go_report->mt_record IS INITIAL .
+
+        go_report->fill_empty_itab( ).
+
+      ENDIF.
+
+      LOOP AT go_report->mt_record ASSIGNING FIELD-SYMBOL(<ls_record>).
+
+        IF CONV i( <ls_record>-creation_day ) < lv_check.
+          DELETE  go_report->mt_record.
+        ENDIF.
+      ENDLOOP.
+    ENDIF.
+
+    refresh_display( ).
+
+  ENDMETHOD.
+
+
+  METHOD do_sum.
+
+    DATA: lt_rows      TYPE lvc_t_row,
+          lv_net_price TYPE ekpo-netpr,
+          lv_ord_value TYPE ekpo-netwr.
+
+    mo_grid->get_selected_rows(
+      IMPORTING
+        et_index_rows = lt_rows ).          " Indexes of Selected Rows
+
+    IF lines( lt_rows ) < 2.
+      MESSAGE 'Select 2 or more records' TYPE 'I'.
+      RETURN.
+    ENDIF.
+
+    LOOP AT lt_rows ASSIGNING FIELD-SYMBOL(<ls_row>).
+      READ TABLE  go_report->mt_record ASSIGNING FIELD-SYMBOL(<ls_display>) INDEX <ls_row>-index.
+      IF  sy-subrc = 0.
+        lv_net_price += <ls_display>-net_price.
+        lv_ord_value += <ls_display>-ord_value.
+      ENDIF.
+    ENDLOOP.
+
+    MESSAGE |Net Price: { lv_net_price }. Order Value : { lv_ord_value }| TYPE 'I'.
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+CLASS lcl_report IMPLEMENTATION.
+  METHOD constructor.
+
+    DATA lo_main_container   TYPE REF TO cl_gui_custom_container.
+
+    CREATE OBJECT lo_main_container
+      EXPORTING
+        container_name              = 'MAIN_CONT'                 " Name of the Screen CustCtrl Name to Link Container To
+      EXCEPTIONS
+        cntl_error                  = 1                " CNTL_ERROR
+        cntl_system_error           = 2                " CNTL_SYSTEM_ERROR
+        create_error                = 3                " CREATE_ERROR
+        lifetime_error              = 4                " LIFETIME_ERROR
+        lifetime_dynpro_dynpro_link = 5                " LIFETIME_DYNPRO_DYNPRO_LINK
+        OTHERS                      = 6.
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    mo_split_main = NEW cl_gui_splitter_container(
+      parent                  = lo_main_container
+      no_autodef_progid_dynnr = abap_true
+      rows                    = 1
+      columns                 = 2
+    ).
+
+    mo_split_main->set_column_width(
+      EXPORTING
+        id                = 1                " Column ID
+        width             = 20               " NPlWidth
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    init_left_container( mo_split_main->get_container( row = 1 column = 1 ) ).
+    init_right_container( mo_split_main->get_container( row = 1 column = 2 ) ).
+
+  ENDMETHOD.
+  METHOD init_left_container.
+
+    DATA(lo_split) = NEW cl_gui_splitter_container(
+      parent                  = io_cont
+      no_autodef_progid_dynnr = abap_true
+      rows                    = 3
+      columns                 = 1
+    ).
+
+    lo_split->set_row_height(
+      EXPORTING
+        id                = 1                 " Row ID
+        height            = 10                 " Height
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    lo_split->set_row_height(
+      EXPORTING
+        id                = 2                 " Row ID
+        height            = 5                 " Height
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3
+    ).
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+
+    lo_split->set_row_sash(
+      EXPORTING
+        id    = 1
+        type  = cl_gui_splitter_container=>type_movable
+        value = cl_gui_splitter_container=>false
+    ).
+
+        lo_split->set_row_sash(
+      EXPORTING
+        id    = 2
+        type  = cl_gui_splitter_container=>type_sashvisible
+        value = cl_gui_splitter_container=>false
+    ).
+
+    CREATE OBJECT mo_filter_area
+      EXPORTING
+        io_container = lo_split->get_container( row = 1 column = 1 ).
+
+    SET HANDLER handle_filter_area FOR mo_filter_area.
+
+    CREATE OBJECT mo_dynamic_menu
+      EXPORTING
+        io_container = lo_split->get_container( row = 2 column = 1 ).
+
+    CREATE OBJECT mo_tree
+      EXPORTING
+        io_container = lo_split->get_container( row = 3 column = 1 ).
+
+  ENDMETHOD.
+  
+  METHOD init_right_container.
+
+    DATA(lo_split) = NEW cl_gui_splitter_container(
+      parent                  = io_cont
+      no_autodef_progid_dynnr = abap_true
+      rows                    = 2
+      columns                 = 1 ).
+    
+    lo_split->set_row_height(
+      EXPORTING
+        id                = 1                 " Row ID
+        height            = 5                 " Height
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3 ).
+   
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    lo_split->set_row_sash(
+      EXPORTING
+        id    = 1
+        type  = cl_gui_splitter_container=>type_sashvisible
+        value = cl_gui_splitter_container=>false ).
+
+    CREATE OBJECT mo_toolbar
+      EXPORTING
+        io_container = lo_split->get_container( row = 1 column = 1 ).
+
+    CREATE OBJECT mo_grid
+      EXPORTING
+        io_container = lo_split->get_container( row = 2 column = 1 ).
+
+  ENDMETHOD.
+
+  METHOD pai_500.
+
+    CASE iv_ok_code.
+      WHEN 'FC_BACK'.
+        LEAVE TO SCREEN 0.
+
+      WHEN 'FC_REFRESH'.
+
+      WHEN 'FC_FULLSCR'.
+        toggle_fullscreen( ).
+    ENDCASE.
+
+  ENDMETHOD.
+  
+  METHOD toggle_fullscreen.
+
+    IF mv_fullscreen IS NOT INITIAL.
+      CLEAR mv_fullscreen.
+      DATA(lv_width) = 20.
+      DATA(lv_column_sash) = cl_gui_splitter_container=>true .
+    ELSE.
+      mv_fullscreen = abap_true.
+      lv_width = 0.
+      lv_column_sash = cl_gui_splitter_container=>false.
+    ENDIF.
+
+    mo_split_main->set_column_width(
+      EXPORTING
+        id                = 1                " Column ID
+        width             = lv_width               " NPlWidth
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3 ).
+    
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+    mo_split_main->set_column_sash(
+      EXPORTING
+        id                = 1                 " Column Splitter Bar ID
+        type              = cl_gui_splitter_container=>type_sashvisible                 " Attribute
+        value             = lv_column_sash                 " Value
+      EXCEPTIONS
+        cntl_error        = 1                " See CL_GUI_CONTROL
+        cntl_system_error = 2                " See CL_GUI_CONTROL
+        OTHERS            = 3 ).
+    
+    IF sy-subrc <> 0.
+      MESSAGE ID sy-msgid TYPE sy-msgty NUMBER sy-msgno
+        WITH sy-msgv1 sy-msgv2 sy-msgv3 sy-msgv4.
+    ENDIF.
+
+  ENDMETHOD.
+
+  METHOD handle_filter_area.
+
+    mo_tree->filter_tree(
+      EXPORTING
+        iv_source_key = iv_source_key
+        iv_days       = iv_days
+    ).
+
+    mo_grid->filter_grid(
+      EXPORTING
+        iv_source_key = iv_source_key
+        iv_days       = iv_days
+    ).
+
+  ENDMETHOD.
+  METHOD refresh_grid.
+
+    mo_grid->refresh_display( ).
+
+  ENDMETHOD.
+
+  METHOD fill_empty_itab.
+
+    mo_tree->fill_itable( ).
+    
+  ENDMETHOD.
+
+  METHOD handle_menu_btn.
+
+    mo_grid->do_sum( ).
+
+  ENDMETHOD.
+
+ENDCLASS.
+
+MODULE pai INPUT.
+  go_report->pai_500( iv_ok_code = gs_screen_500-ok_code ).
+ENDMODULE.
+
+MODULE pbo OUTPUT.
+ SET PF-STATUS 'ZSTANDART'.
+ SET TITLEBAR 'Edocuemnt'.
+ENDMODULE.
+
+MODULE init OUTPUT.
+  IF go_report IS NOT BOUND.
+    CREATE OBJECT go_report.
+  ENDIF.
+ENDMODULE.
